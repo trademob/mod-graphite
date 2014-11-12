@@ -66,7 +66,7 @@ class Graphite_broker(BaseModule):
         else:
             self.port = int(getattr(modconf, 'port', '2003'))
         self.tick_limit = int(getattr(modconf, 'tick_limit', '300'))
-        # Used to reset check time into the scheduled time. 
+        # Used to reset check time into the scheduled time.
         # Carbon/graphite does not like latency data and creates blanks in graphs
         # Every data with "small" latency will be considered create at scheduled time
         self.ignore_latency_limit = \
@@ -148,88 +148,107 @@ class Graphite_broker(BaseModule):
                 res.append((key, value))
         return res
 
-
     # Prepare service custom vars
     def manage_initial_service_status_brok(self, b):
-        if '_GRAPHITE_POST' in b.data['customs']:
-            self.svc_dict[(b.data['host_name'], b.data['service_description'])] = b.data['customs']
-
+        self.svc_dict[(b.data['host_name'], b.data['service_description'])] = b.data['customs']
 
     # Prepare host custom vars
     def manage_initial_host_status_brok(self, b):
-        if '_GRAPHITE_PRE' in b.data['customs']:
-            self.host_dict[b.data['host_name']] = b.data['customs']
+        # store custom variables
+        # as well as the host check_command
+        self.host_dict[b.data['host_name']] = {
+            'customs': b.data['customs'],
+            'check_command': b.data['check_command'].command,
+            'address': b.data['address']
+        }
 
-
-    # A service check result brok has just arrived, we UPDATE data info with this
-    def manage_service_check_result_brok(self, b):
-        data = b.data
-
-        perf_data = data['perf_data']
-        couples = self.get_metric_and_value(perf_data)
-
-        # If no values, we can exit now
-        if len(couples) == 0:
+    # returns the proper graphite metrics name
+    def build_metrics_name(self, host_name, service_description, check_type):
+        # if no customs for host found we exit
+        if not host_name in self.host_dict:
+            logger.error("[Graphite broker] Failed to find custom variables for Host %s." % (host_name,))
             return
 
-        hname = self.illegal_char.sub('_', data['host_name'])
-        if data['host_name'] in self.host_dict:
-            customs_datas = self.host_dict[data['host_name']]
-            if '_GRAPHITE_PRE' in customs_datas:
-                hname = ".".join((customs_datas['_GRAPHITE_PRE'], hname))
+        # If this is a service check we should also check for
+        # service custom data and if no customs for service found we exit
+        if check_type == 'service' and not (host_name, service_description) in self.svc_dict:
+            logger.error("[Graphite broker] Failed to find custom variables for Service %s:%s." % (host_name, service_description))
+            return
 
-        desc = self.illegal_char.sub('_', data['service_description'])
-        if (data['host_name'], data['service_description']) in self.svc_dict:
-            customs_datas = self.svc_dict[(data['host_name'], data['service_description'])]
-            if '_GRAPHITE_POST' in customs_datas:
-                desc = ".".join((desc, customs_datas['_GRAPHITE_POST']))
+        try:
+            # always get host custom data
+            custom_host_data = self.host_dict[host_name]
+            customs = custom_host_data['customs']
+            custom_service_data = {}
 
-        if self.ignore_latency_limit >= data['latency'] > 0:
-            check_time = int(data['last_chk']) - int(data['latency'])
-            logger.info("[Graphite broker] Ignoring latency for service %s. Latency : %s",
-                data['service_description'], data['latency'])
-        else:
-            check_time = int(data['last_chk']) 
+            # if this is a service check we also get service custom data
+            if check_type == 'service':
+                custom_service_data = self.svc_dict[(host_name, service_description)]
 
+            region = customs['_AWS_REGION']
+            az = customs['_AWS_AZ']
+            asg = customs['_AWS_ASG']
+            ip = self.illegal_char.sub('-', custom_host_data['address'])
+            ami_id = customs['_AWS_AMI_ID']
+            m_type = custom_service_data.get('_METRIC_TYPE', 'gauges')
+            service = customs.get('_AWS_SERVICE', host_name)
 
-        #try:
-        #    logger.debug("[Graphite broker] Hostname: %s, Desc: %s, check time: %d, perfdata: %s"
-        #                 % (hname, desc, check_time, str(perf_data)))
-        #except UnicodeEncodeError:
-        #    pass
+            hname = '.'.join((region, az, asg, ip, ami_id, m_type, service))
+        except:
+            logger.error("[Graphite broker] Failed to Build Key For %s:%s." % (host_name, service_description))
+            return
+
+        desc = self.illegal_char.sub('_', service_description)
 
         if self.graphite_data_source:
             path = '.'.join((hname, self.graphite_data_source, desc))
         else:
             path = '.'.join((hname, desc))
 
+        return path
+
+    # returs the check time for the given data
+    def get_time(self, data):
+        if self.ignore_latency_limit >= data['latency'] > 0:
+            check_time = int(data['last_chk']) - int(data['latency'])
+
+            # have nice-ish logger message based in check type
+            if 'service_description' in data:
+                check_type = 'service'
+                check_name = data['service_description']
+            else:
+                check_type = 'host'
+                check_name = data['host_name']
+
+            logger.info("[Graphite broker] Ignoring latency for %s %s. Latency : %s",
+                check_type, check_name, data['latency'])
+        else:
+            check_time = int(data['last_chk'])
+
+        return check_time
+
+    # sends the metric to graphite
+    def send_metrics(self, couples, path, check_time):
         if self.use_pickle:
             # Buffer the performance data lines
             for (metric, value) in couples:
                 self.buffer.append(("%s.%s" % (path, metric),
-                                   ("%d" % check_time, "%s" % str(value))))
-
+                                   ("%d" % check_time, "%s" % value)))
         else:
             lines = []
             # Send a bulk of all metrics at once
             for (metric, value) in couples:
-                lines.append("%s.%s %s %d" % (path, metric, str(value), check_time))
+                lines.append("%s.%s %s %d" % (path, metric, value, check_time))
             packet = '\n'.join(lines) + '\n'  # Be sure we put \n every where
-            #try:
-            #    logger.debug("[Graphite broker] Launching: %s" % packet)
-            #except UnicodeEncodeError:
-            #    pass
             try:
                 self.send_packet(packet)
             except IOError:
                 logger.error("[Graphite broker] Failed sending to the Graphite Carbon."
                              " Data are lost")
 
-
-    # A host check result brok has just arrived, we UPDATE data info with this
-    def manage_host_check_result_brok(self, b):
+    # A service check result brok has just arrived, we UPDATE data info with this
+    def manage_service_check_result_brok(self, b):
         data = b.data
-
         perf_data = data['perf_data']
         couples = self.get_metric_and_value(perf_data)
 
@@ -237,52 +256,38 @@ class Graphite_broker(BaseModule):
         if len(couples) == 0:
             return
 
-        hname = self.illegal_char.sub('_', data['host_name'])
-        if data['host_name'] in self.host_dict:
-            customs_datas = self.host_dict[data['host_name']]
-            if '_GRAPHITE_PRE' in customs_datas:
-                hname = ".".join((customs_datas['_GRAPHITE_PRE'], hname))
-        
-        if self.ignore_latency_limit >= data['latency'] > 0:
-            check_time = int(data['last_chk']) - int(data['latency'])
-            logger.info("[Graphite broker] Ignoring latency for host %s. Latency : %s",
-                data['host_name'], data['latency'])
-        else:
-            check_time = int(data['last_chk'])
+        path = self.build_metrics_name(host_name=data['hostname'], service_description=data['service_description'], check_type='service')
+        if not path:
+            logger.error('Could not build metrics name for %s:%s' % (data['hostname'], data['service_description']))
+            return
 
+        check_time = self.get_time(data)
+        self.send_metrics(couples, path, check_time)
 
-        #try:
-        #    logger.debug("[Graphite broker] Hostname %s, check time: %d, perfdata: %s"
-        #                 % (hname, check_time, str(perf_data)))
-        #except UnicodeEncodeError:
-        #    pass
+    # A host check result brok has just arrived, we UPDATE data info with this
+    def manage_host_check_result_brok(self, b):
+        data = b.data
+        perf_data = data['perf_data']
+        couples = self.get_metric_and_value(perf_data)
 
-        if self.graphite_data_source:
-            path = '.'.join((hname, self.graphite_data_source))
-        else:
-            path = hname
+        # If no values, we can exit now
+        if len(couples) == 0:
+            return
 
-        if self.use_pickle:
-            # Buffer the performance data lines
-            for (metric, value) in couples:
-                self.buffer.append(("%s.__HOST__.%s" % (path, metric),
-                                   ("%d" % check_time,"%s" % value)))
-        else:
-            lines = []
-            # Send a bulk of all metrics at once
-            for (metric, value) in couples:
-                lines.append("%s.__HOST__.%s %s %d" % (path, metric, value, check_time))
-            packet = '\n'.join(lines) + '\n'  # Be sure we put \n every where
-            #try:
-            #    logger.debug("[Graphite broker] Launching: %s" % packet)
-            #except UnicodeEncodeError:
-            #    pass
-            try:
-                self.send_packet(packet)
-            except IOError:
-                logger.error("[Graphite broker] Failed sending to the Graphite Carbon."
-                             " Data are lost")
+        # instead of service description we will use the host check_command
+        host_name = data['host_name']
+        if host_name not in self.host_dict:
+            logger.error('Not custom data available for %s' % (host_name,))
+            return
 
+        service_description = self.host_dict[host_name]['check_command']
+        path = self.build_metrics_name(host_name=host_name, service_description=service_description, check_type='host')
+        if not path:
+            logger.error('Could not build metrics name for %s:%s' % (data['hostname'], data['service_description']))
+            return
+
+        check_time = self.get_time(data)
+        self.send_metrics(couples, path, check_time)
 
     def hook_tick(self, brok):
         """Each second the broker calls the hook_tick function
@@ -319,8 +324,6 @@ class Graphite_broker(BaseModule):
                         return
 
             self.ticks = 0
-
-
 
     def create_pack(self, buff):
         payload = cPickle.dumps(buff)
