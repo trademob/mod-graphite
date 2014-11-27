@@ -185,15 +185,15 @@ class Graphite_broker(BaseModule):
             if check_type == 'service':
                 custom_service_data = self.svc_dict[(host_name, service_description)]
 
-            region = customs['_AWS_REGION']
-            az = customs['_AWS_AZ']
-            asg = customs['_AWS_ASG']
-            ip = self.illegal_char.sub('-', custom_host_data['address'])
-            ami_id = customs['_AWS_AMI_ID']
+            region = 'region=%s' % customs.get('_AWS_REGION', 'no-region-found')
+            az = 'az=%s' % customs.get('_AWS_AZ', 'no-az-found')
+            asg = 'asg=%s' % customs.get('_AWS_ASG', 'no-asg-found')
+            ip = 'ip=%s' % self.illegal_char.sub('-', custom_host_data['address'])
+            ami = 'ami=%s' % customs.get('_AWS_AMI_ID', 'no-ami-found')
             m_type = custom_service_data.get('_METRIC_TYPE', 'gauges')
             service = customs.get('_AWS_SERVICE', host_name)
 
-            hname = '.'.join((region, az, asg, ip, ami_id, m_type, service))
+            hname = '.'.join(('host', ip, region, az, asg, ami, m_type, service))
         except:
             logger.error("[Graphite broker] Failed to Build Key For %s:%s." % (host_name, service_description))
             return
