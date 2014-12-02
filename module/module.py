@@ -188,8 +188,8 @@ class Graphite_broker(BaseModule):
             region = 'region=%s' % customs.get('_AWS_REGION', 'no-region-found')
             az = 'az=%s' % customs.get('_AWS_AZ', 'no-az-found')
             asg = 'asg=%s' % customs.get('_AWS_ASG', 'no-asg-found')
-            ip = 'ip=%s' % self.illegal_char.sub('-', custom_host_data['address'])
-            ami = 'ami=%s' % customs.get('_AWS_AMI_ID', 'no-ami-found')
+            ip = 'ip=%s' % customs.get('_AWS_IP', 'no-ip-found')
+            ami = 'ami=%s' % customs.get('_AWS_AMI', 'no-ami-found')
             m_type = custom_service_data.get('_METRIC_TYPE', 'gauges')
             service = customs.get('_AWS_SERVICE', host_name)
 
