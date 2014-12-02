@@ -194,14 +194,14 @@ class Graphite_broker(BaseModule):
             service = customs.get('_AWS_SERVICE', host_name)
 
             hname = '.'.join(('host', ip, region, az, asg, ami, m_type, service))
-        except:
-            logger.error("[Graphite broker] Failed to Build Key For %s:%s." % (host_name, service_description))
+        except Exception as _e:
+            logger.error("[Graphite broker] Failed to Build Key For %s:%s. -- %s" % (host_name, service_description, _e))
             return
 
         desc = self.illegal_char.sub('_', service_description)
 
         if self.graphite_data_source:
-            path = '.'.join((hname, self.graphite_data_source, desc))
+            path = '.'.join((self.graphite_data_source, hname, desc))
         else:
             path = '.'.join((hname, desc))
 
@@ -256,9 +256,9 @@ class Graphite_broker(BaseModule):
         if len(couples) == 0:
             return
 
-        path = self.build_metrics_name(host_name=data['hostname'], service_description=data['service_description'], check_type='service')
+        path = self.build_metrics_name(host_name=data['host_name'], service_description=data['service_description'], check_type='service')
         if not path:
-            logger.error('Could not build metrics name for %s:%s' % (data['hostname'], data['service_description']))
+            logger.error('Could not build metrics name for %s:%s' % (data['host_name'], data['service_description']))
             return
 
         check_time = self.get_time(data)
