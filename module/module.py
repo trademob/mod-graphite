@@ -189,11 +189,12 @@ class Graphite_broker(BaseModule):
             az = 'az=%s' % customs.get('_AWS_AZ', 'no-az-found')
             asg = 'asg=%s' % customs.get('_AWS_ASG', 'no-asg-found')
             ip = 'ip=%s' % customs.get('_AWS_IP', 'no-ip-found')
+            elb = 'elb=%s' % customs.get('_AWS_ELB', 'no-elb-found')
             ami = 'ami=%s' % customs.get('_AWS_AMI', 'no-ami-found')
             m_type = custom_service_data.get('_METRIC_TYPE', 'gauges')
             service = customs.get('_AWS_SERVICE', host_name)
 
-            hname = '.'.join(('host', ip, region, az, asg, ami, m_type, service))
+            hname = '.'.join(('host', ip, region, az, asg, elb, ami, m_type, service))
         except Exception as _e:
             logger.error("[Graphite broker] Failed to Build Key For %s:%s. -- %s" % (host_name, service_description, _e))
             return
