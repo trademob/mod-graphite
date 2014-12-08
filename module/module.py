@@ -202,7 +202,7 @@ class Graphite_broker(BaseModule):
         desc = self.illegal_char.sub('_', service_description)
 
         if self.graphite_data_source:
-            path = '.'.join((self.graphite_data_source, hname, desc))
+            path = '.'.join((hname, self.graphite_data_source, desc))
         else:
             path = '.'.join((hname, desc))
 
